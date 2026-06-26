@@ -1,0 +1,73 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  role      String   // "admin" | "student"
+  studentId String?  @unique
+  student   Student? @relation(fields: [studentId], references: [rollNo], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Student {
+  rollNo       String        @id
+  name         String
+  gender       String
+  dept         String
+  hostel       String
+  room         String
+  year         String
+  semester     String
+  messFee      Float
+  amountPaid   Float
+  refundEarned Float         @default(0)
+  status       String        @default("Active")
+  email        String
+  phone        String
+  dob          String        @default("2003-06-15")
+  user         User?
+  leaves       LeaveRecord[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model LeaveRecord {
+  id              String   @id @default(uuid())
+  rollNo          String
+  studentName     String
+  hostel          String
+  leaveStart      String
+  leaveEnd        String
+  reason          String
+  breakfastMissed Int
+  lunchMissed     Int
+  dinnerMissed    Int
+  refundAmount    Float
+  status          String   @default("Pending")
+  semester        String
+  student         Student  @relation(fields: [rollNo], references: [rollNo], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Hostel {
+  name      String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
