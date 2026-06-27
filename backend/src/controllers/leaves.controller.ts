@@ -4,13 +4,21 @@ import { leavesService } from '../services/leaves.service.js';
 
 export async function getAll(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { search } = req.query;
-    const leaves = await leavesService.getAllLeaves(search ? String(search) : undefined);
+    const { search, semester, hostel, status, startDate, endDate } = req.query;
+    const leaves = await leavesService.getAllLeaves({
+      search: search ? String(search) : undefined,
+      semester: semester ? String(semester) : undefined,
+      hostel: hostel ? String(hostel) : undefined,
+      status: status ? String(status) : undefined,
+      startDate: startDate ? String(startDate) : undefined,
+      endDate: endDate ? String(endDate) : undefined
+    });
     res.json({ success: true, leaves });
   } catch (error) {
     next(error);
   }
 }
+
 
 export async function getStudentLeaves(req: AuthRequest, res: Response, next: NextFunction) {
   try {

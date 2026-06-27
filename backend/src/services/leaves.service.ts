@@ -4,9 +4,17 @@ import { studentsRepository } from '../repositories/students.repository.js';
 import { settingsRepository } from '../repositories/settings.repository.js';
 
 export class LeavesService {
-  async getAllLeaves(search?: string) {
-    return leavesRepository.findAll(search);
+  async getAllLeaves(filters: {
+    search?: string;
+    semester?: string;
+    hostel?: string;
+    status?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    return leavesRepository.findAll(filters);
   }
+
 
   async getStudentLeaves(rollNo: string) {
     return leavesRepository.findByRollNo(rollNo);
