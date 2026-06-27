@@ -56,6 +56,21 @@ export class AuthService {
       studentName: user.student?.name || null
     };
   }
+
+  async changePassword(userId: string, oldPass: string, newPass: string) {
+    const user = await usersRepository.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    const matched = await bcrypt.compare(oldPass, user.password);
+    if (!matched) {
+      throw new Error('Incorrect old password');
+    }
+    const hashed = await bcrypt.hash(newPass, 10);
+    await usersRepository.updatePassword(userId, hashed);
+    return { success: true };
+  }
 }
 
 export const authService = new AuthService();
+

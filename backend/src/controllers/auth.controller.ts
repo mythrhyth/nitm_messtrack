@@ -23,3 +23,17 @@ export async function getMe(req: AuthRequest, res: Response, next: NextFunction)
     next(error);
   }
 }
+
+export async function changePassword(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    const { oldPassword, newPassword } = req.body;
+    const result = await authService.changePassword(req.user.id, oldPassword, newPassword);
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (error: any) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+}
+

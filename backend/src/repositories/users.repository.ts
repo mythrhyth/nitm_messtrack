@@ -19,6 +19,14 @@ export class UsersRepository {
       include: { student: true }
     });
   }
+
+  async updatePassword(id: string, passwordHash: string): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: { password: passwordHash }
+    });
+  }
 }
 
 export const usersRepository = new UsersRepository();
+
