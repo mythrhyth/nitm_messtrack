@@ -71,3 +71,16 @@ model SystemSetting {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model Semester {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  year        String
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean  @default(false)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
