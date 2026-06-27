@@ -22,10 +22,16 @@ import { studentsApi } from "../services/students";
 import { leavesApi } from "../services/leaves";
 import { settingsApi } from "../services/settings";
 import { dashboardApi } from "../services/dashboard";
+import { semestersApi } from "../services/semesters";
+import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import "jspdf-autotable";
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AuthRole  = "admin" | "student";
-type Page = "dashboard" | "students" | "leave" | "records" | "settings" | "portal";
+type Page = "dashboard" | "students" | "leave" | "records" | "settings" | "portal" | "profile";
+
 
 interface Student {
   rollNo: string; name: string; gender: "M" | "F"; dept: string;
@@ -88,6 +94,88 @@ function downloadText(content: string, filename: string) {
   a.download = filename;
   a.click();
 }
+
+function downloadCSV(headers: string[], rows: any[][], filename: string) {
+  const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.map(val => {
+    const s = String(val ?? '').replace(/"/g, '""');
+    return s.includes(',') || s.includes('\n') || s.includes('"') ? `"${s}"` : s;
+  }).join(","))].join("\n");
+  
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadExcel(sheetTitle: string, headers: string[], rows: any[][], filename: string) {
+  const wb = XLSX.utils.book_new();
+  const wsData = [
+    [sheetTitle],
+    [], // spacing
+    headers,
+    ...rows
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  
+  const maxLens = wsData.map(row => row.map(cell => String(cell ?? '').length));
+  const colWidths = headers.map((_, colIdx) => {
+    let max = 10;
+    maxLens.forEach(rowLens => {
+      if (rowLens[colIdx] > max) max = rowLens[colIdx];
+    });
+    return { wch: max + 2 };
+  });
+  ws['!cols'] = colWidths;
+  
+  XLSX.utils.book_append_sheet(wb, ws, "Records");
+  XLSX.writeFile(wb, filename);
+}
+
+function downloadPDF(reportTitle: string, headers: string[], rows: any[][], filename: string, filters?: string) {
+  const doc = new jsPDF();
+  
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(15, 76, 129); // C.blue
+  doc.text("NATIONAL INSTITUTE OF TECHNOLOGY MEGHALAYA", 14, 15);
+  
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(107, 122, 144); // C.muted
+  doc.text("Mess Tracking Portal & Refund System", 14, 21);
+  
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(13, 27, 42); // C.text
+  doc.text(reportTitle, 14, 29);
+  
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(107, 122, 144); // C.muted
+  const dateStr = new Date().toLocaleDateString("en-IN") + " " + new Date().toLocaleTimeString("en-IN");
+  doc.text(`Generated: ${dateStr}`, 14, 35);
+  
+  if (filters) {
+    doc.text(`Filters: ${filters}`, 14, 40);
+  }
+  
+  const startY = filters ? 45 : 40;
+  
+  (doc as any).autoTable({
+    head: [headers],
+    body: rows,
+    startY: startY,
+    theme: "striped",
+    headStyles: { fillColor: [15, 76, 129] }, // C.blue
+    styles: { fontSize: 8, cellPadding: 2.5 },
+  });
+  
+  doc.save(filename);
+}
+
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -448,17 +536,19 @@ const STUDENT_NAV_ITEMS = [
   { id: "portal"    as Page, label: "Student Portal",     Icon: GraduationCap },
 ];
 
-function Sidebar({ page, setPage, collapsed, setCollapsed, mobileOpen, setMobileOpen, onLogout, isMobile, auth, students }: {
+function Sidebar({ page, setPage, collapsed, setCollapsed, mobileOpen, setMobileOpen, onLogout, isMobile, auth, students, semesters }: {
   page: Page; setPage: (p: Page) => void;
   collapsed: boolean; setCollapsed: (v: boolean) => void;
   mobileOpen: boolean; setMobileOpen: (v: boolean) => void;
   onLogout: () => void; isMobile: boolean;
   auth: { role: AuthRole; id: string } | null;
   students: Student[];
+  semesters: any[];
 }) {
   const showLabels = isMobile ? true : !collapsed;
   const w = isMobile ? 252 : collapsed ? 68 : 252;
   const navItems = auth?.role === "admin" ? ADMIN_NAV_ITEMS : STUDENT_NAV_ITEMS;
+  const activeSemName = semesters.find(s => s.isActive)?.name || semesters[0]?.name || "Spring 2026";
 
   return (
     <>
@@ -494,10 +584,11 @@ function Sidebar({ page, setPage, collapsed, setCollapsed, mobileOpen, setMobile
           <div className="mx-3 mt-3 mb-1">
             <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold"
               style={{ background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.8)" }}>
-              <BookOpen size={12} />Spring 2026<ChevronDown size={11} className="ml-auto" />
+              <BookOpen size={12} />{activeSemName}<ChevronDown size={11} className="ml-auto" />
             </div>
           </div>
         )}
+
         {/* Nav */}
         <nav className="flex-1 px-2 flex flex-col gap-0.5 py-2 overflow-y-auto">
           {navItems.map(({ id, label, Icon }) => {
@@ -544,12 +635,16 @@ const PAGE_META: Record<Page, { title: string; sub: string }> = {
   records:   { title: "Records & Reports",  sub: "Historical data & exports" },
   settings:  { title: "Settings",           sub: "System configuration" },
   portal:    { title: "Student Portal",     sub: "Arjun Sharma · B22ME001 (Read-only)" },
+  profile:   { title: "User Profile",       sub: "View profile details and change password" },
 };
 
-function Topbar({ page, onMenuClick, onLogout, auth, students }: {
+
+function Topbar({ page, onMenuClick, onLogout, auth, students, semesters, setPage }: {
   page: Page; onMenuClick: () => void; onLogout: () => void;
   auth: { role: AuthRole; id: string } | null;
   students: Student[];
+  semesters: any[];
+  setPage: (p: Page) => void;
 }) {
   const { title, sub } = PAGE_META[page];
   const dynamicSub = page === "portal" && auth
@@ -558,6 +653,20 @@ function Topbar({ page, onMenuClick, onLogout, auth, students }: {
   const initials = auth?.role === "student"
     ? (students.find(s => s.rollNo === auth.id)?.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "ST")
     : "AD";
+
+  const activeSemName = semesters.find(s => s.isActive)?.name || semesters[0]?.name || "Spring 2026";
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   return (
     <header className="flex items-center gap-3 px-4 sm:px-5 py-3.5 sticky top-0 z-10 flex-shrink-0"
@@ -573,23 +682,44 @@ function Topbar({ page, onMenuClick, onLogout, auth, students }: {
         <p className="text-xs truncate hidden sm:block" style={{ color: C.muted }}>{dynamicSub}</p>
       </div>
       <div className="hidden sm:flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold" style={{ background: C.blueLight, color: C.blue }}>
-        <BookOpen size={12} />Spring 2026
+        <BookOpen size={12} />{activeSemName}
       </div>
       <button className="relative w-9 h-9 flex items-center justify-center rounded-xl hover:bg-slate-100 flex-shrink-0" style={{ color: C.muted }}>
         <Bell size={18} />
         <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full" style={{ background: C.orange }} />
       </button>
-      <button onClick={onLogout}
-        className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 hover:bg-slate-100 transition-colors cursor-pointer">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ background: C.blue }}>{initials}</div>
-        <ChevronDown size={12} className="hidden sm:block" style={{ color: C.muted }} />
-      </button>
+      <div className="relative" ref={dropdownRef}>
+        <button onClick={() => setDropdownOpen(!dropdownOpen)}
+          className="flex items-center gap-2 rounded-xl px-2.5 py-1.5 hover:bg-slate-100 transition-colors cursor-pointer">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ background: C.blue }}>{initials}</div>
+          <ChevronDown size={12} className="hidden sm:block" style={{ color: C.muted }} />
+        </button>
+        {dropdownOpen && (
+          <div className="absolute right-0 mt-2 w-48 rounded-xl bg-white border border-slate-200 shadow-xl py-1.5 z-50 text-sm" style={{ animation: "slideIn .15s ease" }}>
+            <button onClick={() => { setDropdownOpen(false); setPage("profile"); }}
+              className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors" style={{ color: C.text }}>
+              <User size={14} style={{ color: C.muted }} /> Profile Details
+            </button>
+            <button onClick={() => { setDropdownOpen(false); setPage("profile"); }}
+              className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors" style={{ color: C.text }}>
+              <Lock size={14} style={{ color: C.muted }} /> Change Password
+            </button>
+            <div className="h-px bg-slate-100 my-1" />
+            <button onClick={() => { setDropdownOpen(false); onLogout(); }}
+              className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 text-red-600 transition-colors">
+              <LogOut size={14} /> Log Out
+            </button>
+          </div>
+        )}
+      </div>
     </header>
   );
 }
 
+
 // ─── PAGE: DASHBOARD ──────────────────────────────────────────────────────────
-function DashboardPage() {
+function DashboardPage({ semesters }: { semesters: any[] }) {
+  const activeSemName = semesters.find(s => s.isActive)?.name || semesters[0]?.name || "Spring 2026";
   const [search, setSearch] = useState("");
   const [pg, setPg] = useState(0);
   const PER = 6;
@@ -637,7 +767,7 @@ function DashboardPage() {
     <div className="p-4 sm:p-6 flex flex-col gap-5">
       {/* KPIs */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
-        <KpiCard icon={<Users size={18} />}       label="Total Students"  value={String(totalStudents)} sub="Spring 2026"    color={C.blue}   trend={{ val:"+8%",  up:true }} />
+        <KpiCard icon={<Users size={18} />}       label="Total Students"  value={String(totalStudents)} sub={activeSemName}    color={C.blue}   trend={{ val:"+8%",  up:true }} />
         <KpiCard icon={<UserCheck size={18} />}   label="Active"          value={String(activeStu)}       sub="Enrolled"       color={C.green}  trend={{ val:"+5%",  up:true }} />
         <KpiCard icon={<CalendarOff size={18} />} label="On Leave"        value={String(onLeave)}         sub="Away"           color={C.orange} />
         <KpiCard icon={<IndianRupee size={18} />} label="Collection"      value={fmtINR(collection)}      sub="Semester total" color={C.blue}   trend={{ val:"+5%",  up:true }} />
@@ -696,7 +826,7 @@ function DashboardPage() {
             </AreaChart>
           </ResponsiveContainer>
         </ChartWrap>
-        <ChartWrap title="Revenue vs Refund" sub="Spring 2026">
+        <ChartWrap title="Revenue vs Refund" sub={activeSemName}>
           <ResponsiveContainer width="100%" height={185}>
             <PieChart>
               <Pie data={[{ name:"Net Revenue", value:collection-refunds }, { name:"Refunds", value:refunds }]}
@@ -767,8 +897,8 @@ function DashboardPage() {
 }
 
 // ─── BULK CSV MODALS ──────────────────────────────────────────────────────────
-function BulkAddModal({ open, onClose, onImport }: {
-  open: boolean; onClose: () => void; onImport: (rows: Student[]) => void;
+function BulkAddModal({ open, onClose, onImport, defaultSem }: {
+  open: boolean; onClose: () => void; onImport: (rows: Student[]) => void; defaultSem: string;
 }) {
   const [csvText, setCsvText] = useState("");
   const [preview, setPreview] = useState<Record<string, string>[]>([]);
@@ -800,7 +930,7 @@ function BulkAddModal({ open, onClose, onImport }: {
         rollNo: r.rollNo.toUpperCase(), name: r.name,
         gender: (r.gender === "F" ? "F" : "M") as "M" | "F",
         dept: r.dept || "CS", hostel: r.hostel || "Girls Hostel", room: r.room || "A-101",
-        year: r.year || "2024-28", semester: r.semester || "Spring 2026",
+        year: r.year || "2024-28", semester: r.semester || defaultSem,
         messFee: Number(r.messFee) || 25000,
         amountPaid: r.amountPaid ? (Number(r.amountPaid) ?? 0) : (Number(r.messFee) || 25000),
         email: r.email || `${r.rollNo.trim().toLowerCase()}@nitm.ac.in`,
@@ -954,11 +1084,14 @@ function BulkDeleteModal({ open, onClose, students, onDelete }: {
 }
 
 // ─── PAGE: STUDENTS ───────────────────────────────────────────────────────────
-function StudentsPage() {
+function StudentsPage({ semesters }: { semesters: any[] }) {
   const queryClient = useQueryClient();
+  const defaultSem = semesters.find(s => s.isActive)?.name || semesters[0]?.name || "Spring 2026";
+
   const [search, setSearch] = useState("");
   const [hostelF, setHostelF] = useState("All");
   const [statusF, setStatusF] = useState("All");
+  const [semesterF, setSemesterF] = useState("All");
   const [addOpen,  setAddOpen]  = useState(false);
   const [bulkAdd,  setBulkAdd]  = useState(false);
   const [bulkDel,  setBulkDel]  = useState(false);
@@ -966,6 +1099,7 @@ function StudentsPage() {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [pg, setPg] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error" | "info">("success");
   const PER = 8;
 
   const { data: hostels = [] } = useQuery({
@@ -974,13 +1108,17 @@ function StudentsPage() {
   });
 
   const { data: students = [], isLoading } = useQuery({
-    queryKey: ['students', hostelF, statusF, search],
-    queryFn: () => studentsApi.getAll({ search, hostel: hostelF, status: statusF }).then(res => res.students),
+    queryKey: ['students', hostelF, statusF, search, semesterF],
+    queryFn: () => studentsApi.getAll({ search, hostel: hostelF, status: statusF, semester: semesterF }).then(res => res.students),
   });
 
-  const blank = { rollNo:"", name:"", gender:"M" as "M"|"F", dept:"CS", hostel: hostels[0] || "Girls Hostel", room:"", year:"2024-28", semester:"Spring 2026", messFee:25000, amountPaid:25000, status:"Active" as "Active"|"Inactive"|"On Leave", email:"", phone:"", dob:"2003-06-15" };
+  const blank = { rollNo:"", name:"", gender:"M" as "M"|"F", dept:"CS", hostel: hostels[0] || "Girls Hostel", room:"", year:"2024-28", semester: defaultSem, messFee:25000, amountPaid:25000, status:"Active" as "Active"|"Inactive"|"On Leave", email:"", phone:"", dob:"2003-06-15" };
   const [form, setForm] = useState(blank);
-  const toast = (m: string) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 3000); };
+  const toast = (m: string, type: "success" | "error" | "info" = "success") => {
+    setToastMsg(m);
+    setToastType(type);
+    setTimeout(() => setToastMsg(""), 3000);
+  };
   const f = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const val = e.target.value;
     setForm(p => {
@@ -1004,10 +1142,10 @@ function StudentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       handleCloseAddModal();
-      toast("Student added!");
+      toast("Student added successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to add student");
+      toast(err.message || "Failed to add student", "error");
     }
   });
 
@@ -1016,10 +1154,10 @@ function StudentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       handleCloseAddModal();
-      toast("Student updated!");
+      toast("Student updated successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to update student");
+      toast(err.message || "Failed to update student", "error");
     }
   });
 
@@ -1027,10 +1165,10 @@ function StudentsPage() {
     mutationFn: (roll: string) => studentsApi.delete(roll),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['students'] });
-      toast("Student removed.");
+      toast("Student removed successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to remove student");
+      toast(err.message || "Failed to remove student", "error");
     }
   });
 
@@ -1038,10 +1176,10 @@ function StudentsPage() {
     mutationFn: (list: any[]) => studentsApi.bulkImport(list),
     onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['students'] });
-      toast(res.message || "Import successful!");
+      toast(res.message || "Import completed successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Bulk import failed");
+      toast(err.message || "Bulk import failed", "error");
     }
   });
 
@@ -1049,12 +1187,13 @@ function StudentsPage() {
     mutationFn: (rolls: string[]) => studentsApi.bulkDelete(rolls),
     onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['students'] });
-      toast(res.message || "Deletion successful!");
+      toast(res.message || "Deletion completed successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Bulk deletion failed");
+      toast(err.message || "Bulk deletion failed", "error");
     }
   });
+
 
   const handleCloseAddModal = () => {
     setAddOpen(false);
@@ -1101,6 +1240,86 @@ function StudentsPage() {
     bulkImportMutation.mutate(newRows);
   };
 
+  const exportCSV = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Gender", "Dept", "Hostel", "Room", "Year", "Semester", "Mess Fee (₹)", "Amount Paid (₹)", "Refund (₹)", "Status", "Email", "Phone", "DOB"];
+      const rows = students.map(s => [
+        s.rollNo,
+        s.name,
+        s.gender,
+        s.dept,
+        s.hostel,
+        s.room,
+        s.year,
+        s.semester,
+        s.messFee,
+        s.amountPaid,
+        s.refundEarned,
+        s.status,
+        s.email,
+        s.phone,
+        s.dob
+      ]);
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadCSV(headers, rows, `students_${semLabel}_${dateStr}.csv`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportExcel = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Gender", "Dept", "Hostel", "Room", "Year", "Semester", "Mess Fee (₹)", "Amount Paid (₹)", "Refund (₹)", "Status", "Email", "Phone", "DOB"];
+      const rows = students.map(s => [
+        s.rollNo,
+        s.name,
+        s.gender,
+        s.dept,
+        s.hostel,
+        s.room,
+        s.year,
+        s.semester,
+        s.messFee,
+        s.amountPaid,
+        s.refundEarned,
+        s.status,
+        s.email,
+        s.phone,
+        s.dob
+      ]);
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadExcel(`Student Records - Semester ${semesterF}`, headers, rows, `students_${semLabel}_${dateStr}.xlsx`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportPDF = () => {
+    try {
+      const headers = ["Roll No", "Name", "Hostel", "Semester", "Mess Fee", "Paid", "Status"];
+      const rows = students.map(s => [
+        s.rollNo,
+        s.name,
+        s.hostel,
+        s.semester,
+        fmtINR(s.messFee),
+        fmtINR(s.amountPaid),
+        s.status
+      ]);
+      const filterSummary = `Semester: ${semesterF} | Hostel: ${hostelF} | Status: ${statusF}${search ? ` | Search: "${search}"` : ""}`;
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadPDF("Student Records Ledger", headers, rows, `students_${semLabel}_${dateStr}.pdf`, filterSummary);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
   const handleDelete = (rollNo: string) => {
     if (!confirm(`Remove ${rollNo}?`)) return;
     deleteMutation.mutate(rollNo);
@@ -1115,13 +1334,17 @@ function StudentsPage() {
 
   return (
     <div className="p-4 sm:p-6 flex flex-col gap-4">
-      {toastMsg && <Toast msg={toastMsg} />}
-      <BulkAddModal    open={bulkAdd} onClose={() => setBulkAdd(false)} onImport={handleBulkImport} />
+      {toastMsg && <Toast msg={toastMsg} type={toastType} />}
+      <BulkAddModal    open={bulkAdd} onClose={() => setBulkAdd(false)} onImport={handleBulkImport} defaultSem={defaultSem} />
       <BulkDeleteModal open={bulkDel} onClose={() => setBulkDel(false)} students={students} onDelete={handleBulkDelete} />
 
       {/* Action bar */}
       <div className="flex flex-wrap items-center gap-2">
         <SearchBar value={search} onChange={v => { setSearch(v); setPg(0); }} placeholder="Search roll no, name, dept…" className="flex-1 min-w-36" />
+        <FSelect value={semesterF} onChange={e => { setSemesterF(e.target.value); setPg(0); }} style={{ width:148 }}>
+          <option value="All">All Semesters</option>
+          {semesters.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        </FSelect>
         <FSelect value={hostelF} onChange={e => { setHostelF(e.target.value); setPg(0); }} style={{ width:148 }}>
           <option value="All">All Hostels</option>{hostels.map(h => <option key={h}>{h}</option>)}
         </FSelect>
@@ -1130,8 +1353,11 @@ function StudentsPage() {
           <option>Active</option><option>Inactive</option><option>On Leave</option>
         </FSelect>
         <Btn variant="primary"   icon={<Plus size={14}/>}     onClick={() => { setEditingStudent(null); setForm(blank); setAddOpen(true); }}>Add</Btn>
+
         <Btn variant="teal"      icon={<Upload size={14}/>}   onClick={() => setBulkAdd(true)}>Import CSV</Btn>
-        <Btn variant="secondary" icon={<Download size={14}/>} onClick={() => downloadText(generateStudentCSV(students), "students.csv")}>Export CSV</Btn>
+        <Btn variant="secondary" icon={<Download size={14}/>} onClick={exportCSV}>CSV</Btn>
+        <Btn variant="teal"      icon={<FileSpreadsheet size={14}/>} onClick={exportExcel}>Excel</Btn>
+        <Btn variant="primary"   icon={<Printer size={14}/>}         onClick={exportPDF}>PDF</Btn>
         <Btn variant="danger"    icon={<Trash2 size={14}/>}   onClick={() => setBulkDel(true)}>Delete CSV</Btn>
       </div>
 
@@ -1233,7 +1459,7 @@ function StudentsPage() {
           <Field label="Hostel">    <FSelect value={form.hostel}  onChange={f("hostel")}>{hostels.map(h => <option key={h}>{h}</option>)}</FSelect></Field>
           <Field label="Room">      <FInput value={form.room}     onChange={f("room")}     placeholder="A-101" /></Field>
           <Field label="Year">      <FSelect value={form.year}    onChange={f("year")}>   {["2021-25","2022-26","2023-27","2024-28"].map(y => <option key={y}>{y}</option>)}</FSelect></Field>
-          <Field label="Semester">  <FSelect value={form.semester} onChange={f("semester")}><option>Spring 2026</option><option>Autumn 2026</option></FSelect></Field>
+          <Field label="Semester">  <FSelect value={form.semester} onChange={f("semester")}>{semesters.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</FSelect></Field>
           <Field label="Email">     <FInput value={form.email}    onChange={f("email")}    placeholder="student@nitm.ac.in" type="email" /></Field>
           <Field label="Phone">     <FInput value={form.phone}    onChange={f("phone")}    placeholder="10-digit" /></Field>
           <Field label="Date of Birth" required><FInput value={form.dob} onChange={f("dob")} type="date" /></Field>
@@ -1252,22 +1478,42 @@ function StudentsPage() {
 }
 
 // ─── PAGE: LEAVE ──────────────────────────────────────────────────────────────
-function LeavePage() {
+function LeavePage({ semesters }: { semesters: any[] }) {
   const queryClient = useQueryClient();
   const [rollQ,      setRollQ]      = useState("");
   const [found,      setFound]      = useState<Student | null>(null);
   const [leaveStart, setLeaveStart] = useState("");
   const [leaveEnd,   setLeaveEnd]   = useState("");
   const [reason,     setReason]     = useState("");
-  const [sem,        setSem]        = useState("Spring 2026");
+  const defaultSem = semesters.find(s => s.isActive)?.name || semesters[0]?.name || "Spring 2026";
+  const [sem,        setSem]        = useState(defaultSem);
   const [search,     setSearch]     = useState("");
   const [toastMsg,   setToastMsg]   = useState("");
+  const [toastType,  setToastType]  = useState<"success" | "error" | "info">("success");
   const [editingLeave, setEditingLeave] = useState<any | null>(null);
-  const toast = (m: string) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 3000); };
+
+  // Advanced filters state
+  const [semesterF,  setSemesterF]  = useState("All");
+  const [hostelF,    setHostelF]    = useState("All");
+  const [statusF,    setStatusF]    = useState("All");
+  const [startDateF, setStartDateF] = useState("");
+  const [endDateF,   setEndDateF]   = useState("");
+  const [page,       setPage]       = useState(0);
+
+  const toast = (m: string, type: "success" | "error" | "info" = "success") => {
+    setToastMsg(m);
+    setToastType(type);
+    setTimeout(() => setToastMsg(""), 3000);
+  };
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
     queryFn: () => settingsApi.getSettings().then(res => res.settings),
+  });
+
+  const { data: hostels = [] } = useQuery({
+    queryKey: ['hostels'],
+    queryFn: () => settingsApi.getHostels().then(res => res.hostels),
   });
 
   const bfRate = settings?.bf || 30;
@@ -1283,9 +1529,17 @@ function LeavePage() {
   }, [leaveStart, leaveEnd, bfRate, luRate, diRate]);
 
   const { data: leaves = [], isLoading } = useQuery({
-    queryKey: ['leaves', search],
-    queryFn: () => leavesApi.getAll(search).then(res => res.leaves),
+    queryKey: ['leaves', search, semesterF, hostelF, statusF, startDateF, endDateF],
+    queryFn: () => leavesApi.getAll({
+      search,
+      semester: semesterF,
+      hostel: hostelF,
+      status: statusF,
+      startDate: startDateF || undefined,
+      endDate: endDateF || undefined
+    }).then(res => res.leaves),
   });
+
 
   const createLeaveMutation = useMutation({
     mutationFn: (newLeave: any) => leavesApi.create(newLeave),
@@ -1294,11 +1548,11 @@ function LeavePage() {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardCharts'] });
-      toast("Leave submitted!");
+      toast("Leave submitted successfully!", "success");
       setRollQ(""); setFound(null); setLeaveStart(""); setLeaveEnd(""); setReason("");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to submit leave");
+      toast(err.message || "Failed to submit leave", "error");
     }
   });
 
@@ -1309,11 +1563,11 @@ function LeavePage() {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardCharts'] });
-      toast("Leave updated!");
+      toast("Leave updated successfully!", "success");
       handleCancelEdit();
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to update leave");
+      toast(err.message || "Failed to update leave", "error");
     }
   });
 
@@ -1324,12 +1578,13 @@ function LeavePage() {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
       queryClient.invalidateQueries({ queryKey: ['dashboardCharts'] });
-      toast("Deleted.");
+      toast("Leave deleted successfully!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to delete leave");
+      toast(err.message || "Failed to delete leave", "error");
     }
   });
+
 
   const handleSearch = async () => {
     if (!rollQ.trim()) return;
@@ -1339,11 +1594,11 @@ function LeavePage() {
         setFound(res.student);
       } else {
         setFound(null);
-        toast("Student not found");
+        toast("Student not found", "error");
       }
     } catch {
       setFound(null);
-      toast("Student not found");
+      toast("Student not found", "error");
     }
   };
 
@@ -1369,7 +1624,7 @@ function LeavePage() {
     setLeaveStart("");
     setLeaveEnd("");
     setReason("");
-    setSem("Spring 2026");
+    setSem(defaultSem);
   };
 
   const handleSubmit = () => {
@@ -1402,9 +1657,83 @@ function LeavePage() {
 
   const filtered = leaves;
 
+  const exportCSV = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Hostel", "Semester", "Start Date", "Return Date", "Days", "Breakfasts Missed", "Lunches Missed", "Dinners Missed", "Refund Amount (₹)", "Reason"];
+      const rows = filtered.map(r => [
+        r.rollNo,
+        r.studentName,
+        r.hostel,
+        r.semester,
+        r.leaveStart,
+        r.leaveEnd,
+        daysBetween(r.leaveStart, r.leaveEnd),
+        r.breakfastMissed,
+        r.lunchMissed,
+        r.dinnerMissed,
+        r.refundAmount,
+        r.reason || "Vacation"
+      ]);
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadCSV(headers, rows, `leaves_${semLabel}_${dateStr}.csv`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportExcel = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Hostel", "Semester", "Start Date", "Return Date", "Days", "Breakfasts Missed", "Lunches Missed", "Dinners Missed", "Refund Amount (₹)", "Reason"];
+      const rows = filtered.map(r => [
+        r.rollNo,
+        r.studentName,
+        r.hostel,
+        r.semester,
+        r.leaveStart,
+        r.leaveEnd,
+        daysBetween(r.leaveStart, r.leaveEnd),
+        r.breakfastMissed,
+        r.lunchMissed,
+        r.dinnerMissed,
+        r.refundAmount,
+        r.reason || "Vacation"
+      ]);
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadExcel(`Leave Refund Records - Semester ${semesterF}`, headers, rows, `leaves_${semLabel}_${dateStr}.xlsx`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportPDF = () => {
+    try {
+      const headers = ["Roll No", "Name", "Hostel", "Start", "Return", "Days", "Refund"];
+      const rows = filtered.map(r => [
+        r.rollNo,
+        r.studentName,
+        r.hostel,
+        r.leaveStart,
+        r.leaveEnd,
+        String(daysBetween(r.leaveStart, r.leaveEnd)),
+        fmtINR(r.refundAmount)
+      ]);
+      const filterSummary = `Semester: ${semesterF} | Hostel: ${hostelF} | Status: ${statusF}${startDateF ? ` | From: ${startDateF}` : ""}${endDateF ? ` | To: ${endDateF}` : ""}`;
+      const semLabel = semesterF === "All" ? "all_sems" : semesterF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadPDF("Leave Records & Refund Report", headers, rows, `leaves_${semLabel}_${dateStr}.pdf`, filterSummary);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 flex flex-col gap-5">
-      {toastMsg && <Toast msg={toastMsg} />}
+      {toastMsg && <Toast msg={toastMsg} type={toastType} />}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Form */}
         <Card>
@@ -1433,7 +1762,7 @@ function LeavePage() {
             </div>
             <Field label="Semester">
               <FSelect value={sem} onChange={e => setSem(e.target.value)}>
-                <option>Spring 2026</option><option>Autumn 2026</option>
+                {semesters.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
               </FSelect>
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -1510,10 +1839,38 @@ function LeavePage() {
       </div>
 
       {/* Leave records */}
+      <Card className="p-4 flex flex-wrap items-center gap-3">
+        <SearchBar value={search} onChange={v => { setSearch(v); setPage(0); }} placeholder="Search Roll No or Name..." className="flex-grow max-w-xs" />
+        <FSelect value={semesterF} onChange={e => { setSemesterF(e.target.value); setPage(0); }} style={{ width:140 }}>
+          <option value="All">All Semesters</option>
+          {semesters.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        </FSelect>
+        <FSelect value={hostelF} onChange={e => { setHostelF(e.target.value); setPage(0); }} style={{ width:140 }}>
+          <option value="All">All Hostels</option>
+          {hostels.map(h => <option key={h}>{h}</option>)}
+        </FSelect>
+        <FSelect value={statusF} onChange={e => { setStatusF(e.target.value); setPage(0); }} style={{ width:120 }}>
+          <option value="All">All Statuses</option>
+          <option value="Approved">Approved</option>
+          <option value="Pending">Pending</option>
+          <option value="Rejected">Rejected</option>
+        </FSelect>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color:C.muted }}>From:</span>
+          <FInput type="date" value={startDateF} onChange={e => { setStartDateF(e.target.value); setPage(0); }} style={{ width:130 }} />
+          <span className="text-xs" style={{ color:C.muted }}>To:</span>
+          <FInput type="date" value={endDateF} onChange={e => { setEndDateF(e.target.value); setPage(0); }} style={{ width:130 }} />
+        </div>
+        <div className="flex gap-2 ml-auto">
+          <Btn variant="secondary" size="sm" icon={<Download size={12}/>} onClick={exportCSV}>CSV</Btn>
+          <Btn variant="teal"      size="sm" icon={<FileSpreadsheet size={12}/>} onClick={exportExcel}>Excel</Btn>
+          <Btn variant="primary"   size="sm" icon={<Printer size={12}/>}         onClick={exportPDF}>PDF</Btn>
+        </div>
+      </Card>
+
       <Card>
-        <CardHeader title="Leave Records" sub={`${filtered.length} applications`}
-          actions={<SearchBar value={search} onChange={setSearch} placeholder="Search…" className="w-44 sm:w-52" />}
-        />
+        <CardHeader title="Leave Records" sub={`${filtered.length} applications`} />
+
         <div className="overflow-x-auto">
           {isLoading ? (
             <div className="flex justify-center items-center py-20"><RefreshCw size={24} className="animate-spin text-slate-400" /></div>
@@ -1574,12 +1931,18 @@ function LeavePage() {
 }
 
 // ─── PAGE: RECORDS ────────────────────────────────────────────────────────────
-function RecordsPage() {
+function RecordsPage({ semesters }: { semesters: any[] }) {
   const [hostelF, setHostelF] = useState("All");
   const [semF,    setSemF]    = useState("All");
   const [search,  setSearch]  = useState("");
   const [toastMsg, setToastMsg] = useState("");
-  const toast = (m: string) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2500); };
+  const [toastType, setToastType] = useState<"success" | "error" | "info">("success");
+
+  const toast = (m: string, type: "success" | "error" | "info" = "success") => {
+    setToastMsg(m);
+    setToastType(type);
+    setTimeout(() => setToastMsg(""), 2500);
+  };
 
   const { data: hostels = [] } = useQuery({
     queryKey: ['hostels'],
@@ -1604,14 +1967,95 @@ function RecordsPage() {
   const hostelRefData = charts?.hostelRefData ?? [];
   const semCollData = charts?.semCollData ?? [];
 
+  const exportCSV = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Gender", "Dept", "Hostel", "Room", "Year", "Semester", "Mess Fee (₹)", "Amount Paid (₹)", "Refund (₹)", "Net Consumed (₹)", "Email", "Phone", "DOB"];
+      const rows = filtered.map(s => [
+        s.rollNo,
+        s.name,
+        s.gender,
+        s.dept,
+        s.hostel,
+        s.room,
+        s.year,
+        s.semester,
+        s.messFee,
+        s.amountPaid,
+        s.refundEarned,
+        s.amountPaid - s.refundEarned,
+        s.email,
+        s.phone,
+        s.dob
+      ]);
+      const semLabel = semF === "All" ? "all_sems" : semF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadCSV(headers, rows, `students_${semLabel}_${dateStr}.csv`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportExcel = () => {
+    try {
+      const headers = ["Roll No", "Student Name", "Gender", "Dept", "Hostel", "Room", "Year", "Semester", "Mess Fee (₹)", "Amount Paid (₹)", "Refund (₹)", "Net Consumed (₹)", "Email", "Phone", "DOB"];
+      const rows = filtered.map(s => [
+        s.rollNo,
+        s.name,
+        s.gender,
+        s.dept,
+        s.hostel,
+        s.room,
+        s.year,
+        s.semester,
+        s.messFee,
+        s.amountPaid,
+        s.refundEarned,
+        s.amountPaid - s.refundEarned,
+        s.email,
+        s.phone,
+        s.dob
+      ]);
+      const semLabel = semF === "All" ? "all_sems" : semF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadExcel(`Student Fee Records - Semester ${semF}`, headers, rows, `students_${semLabel}_${dateStr}.xlsx`);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
+  const exportPDF = () => {
+    try {
+      const headers = ["Roll No", "Name", "Hostel", "Semester", "Mess Fee", "Paid", "Refund", "Net"];
+      const rows = filtered.map(s => [
+        s.rollNo,
+        s.name,
+        s.hostel,
+        s.semester,
+        fmtINR(s.messFee),
+        fmtINR(s.amountPaid),
+        fmtINR(s.refundEarned),
+        fmtINR(s.amountPaid - s.refundEarned)
+      ]);
+      const filterSummary = `Semester: ${semF} | Hostel: ${hostelF}${search ? ` | Search: "${search}"` : ""}`;
+      const semLabel = semF === "All" ? "all_sems" : semF.replace(/\s+/g, "_");
+      const dateStr = new Date().toISOString().split("T")[0];
+      downloadPDF("Student Fee Records & Refund Report", headers, rows, `students_${semLabel}_${dateStr}.pdf`, filterSummary);
+      toast("Export completed", "success");
+    } catch {
+      toast("Export failed", "error");
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 flex flex-col gap-5">
-      {toastMsg && <Toast msg={toastMsg} type="info" />}
+      {toastMsg && <Toast msg={toastMsg} type={toastType} />}
       <Card>
         <div className="flex flex-wrap items-center gap-3 p-4">
           <FSelect value={semF}    onChange={e => setSemF(e.target.value)}    style={{ width:160 }}>
             <option value="All">All Semesters</option>
-            <option>Spring 2026</option><option>Autumn 2025</option>
+            {semesters.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
           </FSelect>
           <FSelect value={hostelF} onChange={e => setHostelF(e.target.value)} style={{ width:160 }}>
             <option value="All">All Hostels</option>
@@ -1619,9 +2063,9 @@ function RecordsPage() {
           </FSelect>
           <SearchBar value={search} onChange={setSearch} className="flex-1 min-w-36" />
           <div className="flex flex-wrap gap-2 ml-auto">
-            <Btn variant="secondary" size="sm" icon={<Download size={12}/>} onClick={() => { downloadText(generateStudentCSV(filtered), "records.csv"); toast("CSV exported!"); }}>CSV</Btn>
-            <Btn variant="teal"      size="sm" icon={<FileSpreadsheet size={12}/>} onClick={() => toast("Exporting Excel…")}>Excel</Btn>
-            <Btn variant="primary"   size="sm" icon={<Printer size={12}/>}         onClick={() => toast("Generating PDF…")}>PDF</Btn>
+            <Btn variant="secondary" size="sm" icon={<Download size={12}/>} onClick={exportCSV}>CSV</Btn>
+            <Btn variant="teal"      size="sm" icon={<FileSpreadsheet size={12}/>} onClick={exportExcel}>Excel</Btn>
+            <Btn variant="primary"   size="sm" icon={<Printer size={12}/>}         onClick={exportPDF}>PDF</Btn>
           </div>
         </div>
       </Card>
@@ -1704,13 +2148,113 @@ function RecordsPage() {
   );
 }
 
+// ─── SEMESTER CREATION MODAL ──────────────────────────────────────────────────
+function CreateSemesterModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [year, setYear] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [status, setStatus] = useState("Inactive");
+  const [description, setDescription] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setError("");
+    if (!name.trim() || !year.trim() || !startDate || !endDate) {
+      setError("Please fill all required fields");
+      return;
+    }
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (end <= start) {
+      setError("End date must be after start date");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await semestersApi.create({
+        name: name.trim(),
+        year: year.trim(),
+        startDate,
+        endDate,
+        isActive: status === "Active",
+        description: description.trim() || undefined
+      });
+      if (res.success) {
+        onCreated();
+        setName(""); setYear(""); setStartDate(""); setEndDate(""); setStatus("Inactive"); setDescription("");
+        onClose();
+      } else {
+        setError(res.message || "Failed to create semester");
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to create semester");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Create Semester" width="max-w-md">
+      <div className="flex flex-col gap-4">
+        {error && (
+          <div className="flex items-start gap-2 rounded-xl p-3" style={{ background: C.redLight }}>
+            <AlertTriangle size={14} style={{ color: C.red, flexShrink: 0, marginTop: 1 }} />
+            <p className="text-xs" style={{ color: C.red }}>{error}</p>
+          </div>
+        )}
+        <Field label="Semester Name" required>
+          <FInput value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Spring 2027" />
+        </Field>
+        <Field label="Academic Year" required>
+          <FInput value={year} onChange={e => setYear(e.target.value)} placeholder="e.g. 2026-27" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Start Date" required>
+            <FInput type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+          </Field>
+          <Field label="End Date" required>
+            <FInput type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Status">
+          <FSelect value={status} onChange={e => setStatus(e.target.value)}>
+            <option value="Inactive">Inactive</option>
+            <option value="Active">Active</option>
+          </FSelect>
+        </Field>
+        <Field label="Description">
+          <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional description..." rows={2}
+            className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none resize-none"
+            style={{ background: "#F1F5F9", border: "1.5px solid transparent", color: C.text }} />
+        </Field>
+        <div className="flex gap-2 pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+          <Btn variant="primary" icon={loading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />} disabled={loading} onClick={submit}>
+            {loading ? "Creating..." : "Create"}
+          </Btn>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── PAGE: SETTINGS ───────────────────────────────────────────────────────────
-function SettingsPage() {
+function SettingsPage({ semesters, refetchSemesters, students }: { semesters: any[]; refetchSemesters: () => void; students: Student[] }) {
   const queryClient = useQueryClient();
   const [tab, setTab]           = useState<"semester"|"fees"|"hostels">("semester");
   const [newHostel, setNewHostel] = useState("");
   const [toastMsg, setToastMsg] = useState("");
-  const toast = (m: string) => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2500); };
+  const [toastType, setToastType] = useState<"success" | "error" | "info">("success");
+  const [createSemOpen, setCreateSemOpen] = useState(false);
+
+  const toast = (m: string, type: "success" | "error" | "info" = "success") => {
+    setToastMsg(m);
+    setToastType(type);
+    setTimeout(() => setToastMsg(""), 2500);
+  };
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
@@ -1740,10 +2284,10 @@ function SettingsPage() {
     mutationFn: (fee: number) => settingsApi.updateFees(fee),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
-      toast("Saved!");
+      toast("Settings updated!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to update fees");
+      toast(err.message || "Failed to update fees", "error");
     }
   });
 
@@ -1752,10 +2296,10 @@ function SettingsPage() {
       settingsApi.updateMeals(rates.bf, rates.lu, rates.di),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
-      toast("Meal prices saved!");
+      toast("Settings updated!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to update meal rates");
+      toast(err.message || "Failed to update meal rates", "error");
     }
   });
 
@@ -1764,10 +2308,10 @@ function SettingsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hostels'] });
       setNewHostel("");
-      toast("Hostel added!");
+      toast("Hostel added!", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to add hostel");
+      toast(err.message || "Failed to add hostel", "error");
     }
   });
 
@@ -1775,10 +2319,10 @@ function SettingsPage() {
     mutationFn: (name: string) => settingsApi.deleteHostel(name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hostels'] });
-      toast("Removed.");
+      toast("Hostel removed.", "success");
     },
     onError: (err: any) => {
-      toast(err.message || "Failed to remove hostel");
+      toast(err.message || "Failed to remove hostel", "error");
     }
   });
 
@@ -1809,7 +2353,7 @@ function SettingsPage() {
 
   return (
     <div className="p-4 sm:p-6 flex flex-col gap-5">
-      {toastMsg && <Toast msg={toastMsg} />}
+      {toastMsg && <Toast msg={toastMsg} type={toastType} />}
       <div className="flex gap-1 rounded-xl p-1 overflow-x-auto" style={{ background:C.card, border:`1px solid ${C.border}`, width:"fit-content", maxWidth:"100%", boxShadow:C.shadow }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -1823,55 +2367,60 @@ function SettingsPage() {
       {tab === "semester" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <Card>
-            <CardHeader title="Active Semesters" />
+            <CardHeader title="Active & Historical Semesters" />
             <div className="p-5 flex flex-col gap-3">
-              {[{s:"Spring 2026",active:true,range:"Jan–Jun 2026",n:430},{s:"Autumn 2026",active:false,range:"Jul–Dec 2026",n:0},{s:"Autumn 2025",active:false,range:"Jul–Dec 2025",n:418}].map(s => (
-                <div key={s.s} className="flex items-center gap-3 rounded-xl p-4"
-                  style={{ background:s.active?C.blueLight:"#F8FAFC", border:`1px solid ${s.active?C.blue+"30":C.border}` }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold"
-                    style={{ background:s.active?C.blue:"#CBD5E1", color:s.active?"#fff":"#64748B" }}>
-                    {s.s.slice(0,2).toUpperCase()}
+              {semesters.map(s => {
+                const count = students.filter(stu => stu.semester === s.name).length;
+                
+                // Format range
+                const opt: Intl.DateTimeFormatOptions = { month: 'short', year: 'numeric' };
+                const sRange = new Date(s.startDate).toLocaleDateString('en-US', opt);
+                const eRange = new Date(s.endDate).toLocaleDateString('en-US', opt);
+                const range = `${sRange.split(' ')[0]}–${eRange}`;
+
+                return (
+                  <div key={s.id} className="flex items-center gap-3 rounded-xl p-4"
+                    style={{ background:s.isActive?C.blueLight:"#F8FAFC", border:`1px solid ${s.isActive?C.blue+"30":C.border}` }}>
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold"
+                      style={{ background:s.isActive?C.blue:"#CBD5E1", color:s.isActive?"#fff":"#64748B" }}>
+                      {s.name.slice(0,2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold" style={{ color:C.text }}>{s.name}</div>
+                      <div className="text-xs" style={{ color:C.muted }}>{range} · {count} students</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <StatusBadge status={s.isActive ? "Active" : "Inactive"} />
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold" style={{ color:C.text }}>{s.s}</div>
-                    <div className="text-xs" style={{ color:C.muted }}>{s.range} · {s.n} students</div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {s.active && <StatusBadge status="Active" />}
-                    <Btn variant="ghost" size="sm" onClick={() => toast(`${s.s} ${s.active?"archived":"restored"}`)}>{s.active?"Archive":"Restore"}</Btn>
-                  </div>
-                </div>
-              ))}
-              <div className="flex gap-2 mt-1">
-                <FInput placeholder="New semester (e.g. Spring 2027)" className="flex-1" value="" readOnly />
-                <Btn variant="primary" icon={<Plus size={14}/>} onClick={() => toast("Semester created!")} disabled>Create</Btn>
+                );
+              })}
+              <div className="flex justify-end mt-2">
+                <Btn variant="primary" icon={<Plus size={14}/>} onClick={() => setCreateSemOpen(true)}>Create Semester</Btn>
               </div>
             </div>
           </Card>
           <Card>
             <CardHeader title="Semester Timeline" />
             <div className="p-5 relative ml-4 flex flex-col gap-4">
-              {[
-                {s:"Spring 2026",c:C.blue, active:true},
-                {s:"Autumn 2025",c:C.green},
-                {s:"Spring 2025",c:C.green},
-                {s:"Autumn 2024",c:C.muted},
-              ].map((s, i) => (
-                <div key={s.s} className="flex gap-4 items-start relative">
-                  <div className="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10" style={{ background:s.c, boxShadow:s.active?`0 0 0 4px ${C.blue}20`:"" }} />
-                  {i < 3 && <div className="absolute left-[5.5px] top-4 w-0.5" style={{ bottom:"-16px", background:C.border }} />}
+              {semesters.map((s, i) => (
+                <div key={s.id} className="flex gap-4 items-start relative">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0 mt-1.5 z-10" style={{ background:s.isActive?C.blue:C.green, boxShadow:s.isActive?`0 0 0 4px ${C.blue}20`:"" }} />
+                  {i < semesters.length - 1 && <div className="absolute left-[5.5px] top-4 w-0.5" style={{ bottom:"-16px", background:C.border }} />}
                   <div className="flex-1 rounded-xl p-3.5" style={{ background:"#F8FAFC", border:`1px solid ${C.border}` }}>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-bold" style={{ color:C.text }}>{s.s}</span>
-                      <StatusBadge status={s.active?"Active":"Inactive"} />
+                      <span className="text-sm font-bold" style={{ color:C.text }}>{s.name}</span>
+                      <StatusBadge status={s.isActive?"Active":"Inactive"} />
                     </div>
                   </div>
                 </div>
               ))}
             </div>
           </Card>
+          <CreateSemesterModal open={createSemOpen} onClose={() => setCreateSemOpen(false)} onCreated={() => { refetchSemesters(); toast("Semester created!", "success"); }} />
         </div>
       )}
+
 
       {tab === "fees" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -2048,7 +2597,7 @@ function PortalPage({ studentId }: { studentId: string }) {
         {/* Fee card */}
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="Spring 2026 — Fee Summary" />
+            <CardHeader title={`${student.semester} — Fee Summary`} />
             <div className="p-4 sm:p-5 flex flex-col gap-5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
@@ -2151,8 +2700,239 @@ function PortalPage({ studentId }: { studentId: string }) {
   );
 }
 
+// ─── PAGE: USER PROFILE ───────────────────────────────────────────────────────
+function ProfilePage({ auth, students }: { auth: any; students: Student[] }) {
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error" | "info">("success");
+
+  const toast = (m: string, type: "success" | "error" | "info" = "success") => {
+    setToastMsg(m);
+    setToastType(type);
+    setTimeout(() => setToastMsg(""), 3000);
+  };
+
+  const student = auth.role === "student"
+    ? students.find(s => s.rollNo === auth.id)
+    : null;
+
+  const { data: myLeaves = [] } = useQuery({
+    queryKey: ['studentLeaves', auth?.id],
+    queryFn: () => leavesApi.getStudentLeaves(auth.id).then(res => res.leaves),
+    enabled: auth?.role === "student",
+  });
+
+  const handlePasswordChange = async () => {
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      toast("Please fill in all password fields", "error");
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast("New password must be at least 6 characters", "error");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast("New passwords do not match", "error");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await authApi.changePassword({ oldPassword, newPassword });
+      if (res.success) {
+        toast("Password changed successfully!", "success");
+        setOldPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+      } else {
+        toast(res.message || "Failed to change password", "error");
+      }
+    } catch (err: any) {
+      toast(err.message || "Failed to change password", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Stats Calculations
+  const totalStudentsCount = students.length;
+  const activeStudentsCount = students.filter(s => s.status === "Active").length;
+  const totalRefundsAmount = students.reduce((sum, s) => sum + s.refundEarned, 0);
+  const totalCollectionAmount = students.reduce((sum, s) => sum + s.amountPaid, 0);
+  const netRevenueAmount = totalCollectionAmount - totalRefundsAmount;
+
+  const totalLeaveDays = myLeaves.reduce((a, l) => a + daysBetween(l.leaveStart, l.leaveEnd), 0);
+
+  return (
+    <div className="p-4 sm:p-6 flex flex-col gap-5 max-w-4xl mx-auto">
+      {toastMsg && <Toast msg={toastMsg} type={toastType} />}
+      
+      {/* Detailed Statistics Section */}
+      <Card>
+        <CardHeader title="Account Statistics & Overview" />
+        <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {auth.role === "admin" ? (
+            <>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.blueLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.blue }}>
+                  <span>Total Enrolled</span>
+                  <Users size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{totalStudentsCount}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Students registered</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.greenLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.green }}>
+                  <span>Active Enrolled</span>
+                  <UserCheck size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{activeStudentsCount}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Currently active in mess</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.orangeLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.orange }}>
+                  <span>Total Refunds</span>
+                  <RefreshCw size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{fmtINR(totalRefundsAmount)}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Student refunds earned</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.tealLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.teal }}>
+                  <span>Net Revenue</span>
+                  <TrendingUp size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{fmtINR(netRevenueAmount)}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Mess fees net collection</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.blueLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.blue }}>
+                  <span>Leaves Applied</span>
+                  <CalendarDays size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{myLeaves.length}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Total leave periods</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.tealLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.teal }}>
+                  <span>Leave Days</span>
+                  <CalendarOff size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{totalLeaveDays} days</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Total missed meal days</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.orangeLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.orange }}>
+                  <span>Refund Earned</span>
+                  <RefreshCw size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{student ? fmtINR(student.refundEarned) : "₹0"}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Refund to offset next fees</div>
+              </div>
+              <div className="rounded-xl p-4 flex flex-col gap-1.5" style={{ background: C.greenLight }}>
+                <div className="flex items-center justify-between text-xs font-semibold" style={{ color: C.green }}>
+                  <span>Effective Consumed</span>
+                  <IndianRupee size={14} />
+                </div>
+                <div className="text-xl font-bold" style={{ color: C.text }}>{student ? fmtINR(student.amountPaid - student.refundEarned) : "₹0"}</div>
+                <div className="text-[10px]" style={{ color: C.muted }}>Paid fee minus refund</div>
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+      
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {/* User Card */}
+        <div className="md:col-span-1">
+          <Card className="p-5 flex flex-col items-center text-center gap-4">
+            <div className="w-20 h-20 rounded-2xl flex items-center justify-center text-2xl font-bold text-white flex-shrink-0"
+              style={{ background: `linear-gradient(135deg, ${C.blueMid}, ${C.blue})` }}>
+              {auth.role === "admin" ? "AD" : (student?.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase() || "ST")}
+            </div>
+            <div>
+              <h2 className="text-lg font-bold" style={{ color: C.text }}>
+                {auth.role === "admin" ? "Super Admin" : (student?.name || "Student")}
+              </h2>
+              <p className="text-xs" style={{ color: C.muted }}>
+                {auth.role === "admin" ? "@admin" : auth.id}
+              </p>
+            </div>
+            <div className="w-full h-px bg-slate-100 my-1" />
+            <div className="w-full flex flex-col gap-2.5 text-xs text-left">
+              <div className="flex justify-between">
+                <span style={{ color: C.muted }}>System Role:</span>
+                <span className="font-semibold capitalize" style={{ color: C.textSub }}>{auth.role} User</span>
+              </div>
+              {student && (
+                <>
+                  <div className="flex justify-between">
+                    <span style={{ color: C.muted }}>Department:</span>
+                    <span className="font-semibold" style={{ color: C.textSub }}>{student.dept}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span style={{ color: C.muted }}>Hostel:</span>
+                    <span className="font-semibold" style={{ color: C.textSub }}>{student.hostel}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span style={{ color: C.muted }}>Room:</span>
+                    <span className="font-semibold" style={{ color: C.textSub }}>{student.room}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* Details & Password Form */}
+        <div className="md:col-span-2 flex flex-col gap-5">
+          {student && (
+            <Card>
+              <CardHeader title="Student Details" />
+              <div className="p-5 grid grid-cols-2 gap-4 text-sm">
+                <Field label="Email Address"><FInput value={student.email} readOnly /></Field>
+                <Field label="Phone Number"><FInput value={student.phone} readOnly /></Field>
+                <Field label="Date of Birth"><FInput value={student.dob} readOnly /></Field>
+                <Field label="Current Semester"><FInput value={student.semester} readOnly /></Field>
+              </div>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader title="Change Password" />
+            <div className="p-5 flex flex-col gap-4">
+              <Field label="Old Password" required>
+                <FInput type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} placeholder="••••••••" />
+              </Field>
+              <Field label="New Password" required>
+                <FInput type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="At least 6 characters" />
+              </Field>
+              <Field label="Confirm New Password" required>
+                <FInput type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Confirm your new password" />
+              </Field>
+              <div className="pt-2 flex justify-start">
+                <Btn variant="primary" icon={loading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                  disabled={loading} onClick={handlePasswordChange}>
+                  {loading ? "Changing..." : "Change Password"}
+                </Btn>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 export default function App() {
+
   const [auth,       setAuth]       = useState<{ role: AuthRole; id: string } | null>(() => {
     const stored = localStorage.getItem('user');
     if (stored) {
@@ -2199,6 +2979,13 @@ export default function App() {
     enabled: !!auth,
   });
 
+  const { data: semesters = [], refetch: refetchSemesters } = useQuery({
+    queryKey: ['semesters'],
+    queryFn: () => semestersApi.getAll().then(res => res.semesters),
+    enabled: !!auth,
+  });
+
+
   if (!auth) return (
     <>
       <style>{`@keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
@@ -2225,19 +3012,23 @@ export default function App() {
             onLogout={handleLogout} isMobile={isMobile}
             auth={auth}
             students={students}
+            semesters={semesters}
           />
         )}
         <div className="flex-1 flex flex-col min-w-0 h-screen">
-          <Topbar page={page} onMenuClick={() => setMobileOpen(true)} onLogout={handleLogout} auth={auth} students={students} />
+          <Topbar page={page} onMenuClick={() => setMobileOpen(true)} onLogout={handleLogout} auth={auth} students={students} semesters={semesters} setPage={setPage} />
           <main className="flex-1 overflow-y-auto">
-            {page === "dashboard" && auth.role === "admin" && <DashboardPage />}
-            {page === "students"  && auth.role === "admin" && <StudentsPage />}
-            {page === "leave"     && auth.role === "admin" && <LeavePage />}
-            {page === "records"   && auth.role === "admin" && <RecordsPage />}
-            {page === "settings"  && auth.role === "admin" && <SettingsPage />}
+            {page === "dashboard" && auth.role === "admin" && <DashboardPage semesters={semesters} />}
+            {page === "students"  && auth.role === "admin" && <StudentsPage semesters={semesters} />}
+            {page === "leave"     && auth.role === "admin" && <LeavePage semesters={semesters} />}
+            {page === "records"   && auth.role === "admin" && <RecordsPage semesters={semesters} />}
+            {page === "settings"  && auth.role === "admin" && <SettingsPage semesters={semesters} refetchSemesters={refetchSemesters} students={students} />}
             {page === "portal"    && <PortalPage studentId={auth.id} />}
+            {page === "profile"   && <ProfilePage auth={auth} students={students} />}
           </main>
+
         </div>
+
       </div>
     </>
   );
