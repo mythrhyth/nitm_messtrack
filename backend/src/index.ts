@@ -11,6 +11,7 @@ import studentRoutes from './routes/students.routes.js';
 import leaveRoutes from './routes/leaves.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
+import semesterRoutes from './routes/semesters.routes.js';
 import { errorHandler } from './middleware/error.middleware.js';
 
 const app = express();
@@ -81,6 +82,7 @@ app.use('/api/students', studentRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/semesters', semesterRoutes);
 
 // Root Ping Endpoint
 app.get('/health', (req, res) => {
