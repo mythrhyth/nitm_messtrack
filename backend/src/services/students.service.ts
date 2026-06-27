@@ -4,7 +4,7 @@ import { Student } from '@prisma/client';
 import { studentsRepository } from '../repositories/students.repository.js';
 
 export class StudentsService {
-  async getAllStudents(filters: { search?: string; hostel?: string; status?: string }) {
+  async getAllStudents(filters: { search?: string; hostel?: string; status?: string; semester?: string }) {
     return studentsRepository.findAll(filters);
   }
 
@@ -20,6 +20,11 @@ export class StudentsService {
     const existing = await studentsRepository.findByRollNo(data.rollNo);
     if (existing) {
       throw new Error('Student with this roll number already exists');
+    }
+
+    const emailExisting = await prisma.student.findFirst({ where: { email: data.email } });
+    if (emailExisting) {
+      throw new Error('Student with this email address already exists');
     }
 
     const dobValue = data.dob || '2003-06-15';
@@ -40,6 +45,18 @@ export class StudentsService {
   }
 
   async updateStudent(rollNo: string, data: Partial<Student>) {
+    if (data.email) {
+      const emailExisting = await prisma.student.findFirst({
+        where: {
+          email: data.email,
+          NOT: { rollNo }
+        }
+      });
+      if (emailExisting) {
+        throw new Error('Student with this email address already exists');
+      }
+    }
+
     return prisma.$transaction(async (tx) => {
       const student = await tx.student.update({
         where: { rollNo },
@@ -57,6 +74,7 @@ export class StudentsService {
       return student;
     });
   }
+
 
   async deleteStudent(rollNo: string) {
     return studentsRepository.delete(rollNo);

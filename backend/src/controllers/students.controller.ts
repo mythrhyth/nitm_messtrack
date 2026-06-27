@@ -4,17 +4,19 @@ import { studentsService } from '../services/students.service.js';
 
 export async function getAll(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { search, hostel, status } = req.query;
+    const { search, hostel, status, semester } = req.query;
     const students = await studentsService.getAllStudents({
       search: search ? String(search) : undefined,
       hostel: hostel ? String(hostel) : undefined,
-      status: status ? String(status) : undefined
+      status: status ? String(status) : undefined,
+      semester: semester ? String(semester) : undefined
     });
     res.json({ success: true, students });
   } catch (error) {
     next(error);
   }
 }
+
 
 export async function getByRollNo(req: AuthRequest, res: Response, next: NextFunction) {
   try {

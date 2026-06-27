@@ -6,6 +6,7 @@ export class StudentsRepository {
     search?: string;
     hostel?: string;
     status?: string;
+    semester?: string;
   }): Promise<Student[]> {
     const where: any = {};
 
@@ -15,12 +16,15 @@ export class StudentsRepository {
     if (filters.status && filters.status !== 'All') {
       where.status = filters.status;
     }
+    if (filters.semester && filters.semester !== 'All') {
+      where.semester = filters.semester;
+    }
     if (filters.search) {
       const q = filters.search;
       where.OR = [
-        { rollNo: { contains: q } },
-        { name: { contains: q } },
-        { dept: { contains: q } }
+        { rollNo: { contains: q, mode: 'insensitive' } },
+        { name: { contains: q, mode: 'insensitive' } },
+        { dept: { contains: q, mode: 'insensitive' } }
       ];
     }
 
@@ -29,6 +33,7 @@ export class StudentsRepository {
       orderBy: { rollNo: 'asc' }
     });
   }
+
 
   async findByRollNo(rollNo: string): Promise<Student | null> {
     return prisma.student.findUnique({

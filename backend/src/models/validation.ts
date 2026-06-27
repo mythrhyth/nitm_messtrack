@@ -51,3 +51,18 @@ export const MealPricesSchema = z.object({
 export const HostelSchema = z.object({
   name: z.string().min(1, 'Hostel name is required')
 });
+
+export const SemesterCreateSchema = z.object({
+  name: z.string().min(1, 'Semester name is required'),
+  year: z.string().min(1, 'Academic year is required'),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Start date must be YYYY-MM-DD'),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'End date must be YYYY-MM-DD'),
+  isActive: z.boolean().default(false),
+  description: z.string().optional()
+});
+
+export const ChangePasswordSchema = z.object({
+  oldPassword: z.string().min(1, 'Old password is required'),
+  newPassword: z.string().min(6, 'New password must be at least 6 characters long')
+});
+
