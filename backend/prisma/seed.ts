@@ -4,20 +4,41 @@ import bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
-  // clear tables
-  await prisma.user.deleteMany({});
-  await prisma.leaveRecord.deleteMany({});
-  await prisma.student.deleteMany({});
-  await prisma.hostel.deleteMany({});
-  await prisma.systemSetting.deleteMany({});
-
-  // seed hostels
-  const hostels = ["Girls Hostel", "Boys Hostel (Single Seater)", "Boys Hostel (Triple Seater)"];
-  for (const h of hostels) {
-    await prisma.hostel.create({ data: { name: h } });
+  // Clear tables safely (catch any constraint errors from shared/dirty databases)
+  try {
+    await prisma.leaveRecord.deleteMany({});
+  } catch (err) {
+    console.warn('Warning: Could not clear LeaveRecord table:', err);
   }
 
-  // seed settings
+  try {
+    // Only delete student users to avoid deleting the admin user if referenced by other apps
+    await prisma.user.deleteMany({
+      where: {
+        role: 'student'
+      }
+    });
+  } catch (err) {
+    console.warn('Warning: Could not clear student users:', err);
+  }
+
+  try {
+    await prisma.student.deleteMany({});
+  } catch (err) {
+    console.warn('Warning: Could not clear student table:', err);
+  }
+
+  // seed hostels using upserts
+  const hostels = ["Girls Hostel", "Boys Hostel (Single Seater)", "Boys Hostel (Triple Seater)"];
+  for (const h of hostels) {
+    await prisma.hostel.upsert({
+      where: { name: h },
+      update: {},
+      create: { name: h }
+    });
+  }
+
+  // seed settings using upserts
   const settings = [
     { key: 'messFee', value: '25000' },
     { key: 'bf', value: '30' },
@@ -25,13 +46,19 @@ async function main() {
     { key: 'di', value: '65' },
   ];
   for (const s of settings) {
-    await prisma.systemSetting.create({ data: s });
+    await prisma.systemSetting.upsert({
+      where: { key: s.key },
+      update: { value: s.value },
+      create: s
+    });
   }
 
-  // hash admin password
+  // Hash and upsert admin user
   const adminPasswordHash = await bcrypt.hash('admin123', 10);
-  await prisma.user.create({
-    data: {
+  await prisma.user.upsert({
+    where: { username: 'admin' },
+    update: { password: adminPasswordHash, role: 'admin' },
+    create: {
       username: 'admin',
       password: adminPasswordHash,
       role: 'admin'
@@ -60,10 +87,36 @@ async function main() {
   ];
 
   for (const s of students) {
-    await prisma.student.create({ data: s });
-    // create student user account
-    await prisma.user.create({
-      data: {
+    // Upsert student record
+    await prisma.student.upsert({
+      where: { rollNo: s.rollNo },
+      update: {
+        name: s.name,
+        gender: s.gender,
+        dept: s.dept,
+        hostel: s.hostel,
+        room: s.room,
+        year: s.year,
+        semester: s.semester,
+        messFee: s.messFee,
+        amountPaid: s.amountPaid,
+        refundEarned: s.refundEarned,
+        status: s.status,
+        email: s.email,
+        phone: s.phone
+      },
+      create: s
+    });
+
+    // Upsert student user account
+    await prisma.user.upsert({
+      where: { username: s.rollNo },
+      update: {
+        password: studentDOBHash,
+        role: 'student',
+        studentId: s.rollNo
+      },
+      create: {
         username: s.rollNo,
         password: studentDOBHash,
         role: 'student',
