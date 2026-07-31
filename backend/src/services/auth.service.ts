@@ -2,7 +2,13 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { usersRepository } from '../repositories/users.repository.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-12345-nitm-messtrack-app-production-key';
+const DEFAULT_SECRET = 'super-secret-key-12345-nitm-messtrack-app-production-key';
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEFAULT_SECRET) {
+    throw new Error('PRODUCTION SECURITY ERROR: A secure, custom JWT_SECRET environment variable must be set in production.');
+  }
+}
+const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_SECRET;
 
 export class AuthService {
   async login(username: string, password: string) {

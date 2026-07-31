@@ -134,3 +134,8 @@ JWT_SECRET="super-secret-key-12345-nitm-messtrack-app-production-key"
 ## 📖 API Documentation & Swagger
 Once the backend server is running, you can explore, test, and query all REST API endpoints using the interactive Swagger UI panel:
 👉 **[http://localhost:5000/api-docs](http://localhost:5000/api-docs)**
+
+---
+
+## 🚀 Production Deployment
+For deploying this application in production using Vercel (frontend), Render (backend), and Neon (PostgreSQL database), please refer to the comprehensive [Production Deployment Guide](file:///c:/PROJECTS/NITM%20MessTrack%20Web%20App/DEPLOYMENT.md).
